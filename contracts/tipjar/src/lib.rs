@@ -27,6 +27,9 @@ pub mod governance;
 // Staking and Rewards
 pub mod staking;
 
+// Milestone NFT system
+pub mod nft;
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TipWithMessage {
@@ -192,6 +195,16 @@ pub enum DataKey {
     TipRecord(u64),
     /// Global tip counter for assigning tip IDs.
     TipCounter,
+    /// NFT token data by token ID.
+    NftToken(u64),
+    /// List of NFT token IDs owned by address.
+    NftOwnerTokens(Address),
+    /// Monotonic counter used to assign unique NFT token IDs.
+    NftCounter,
+    /// Running creator tip total used for milestone calculations.
+    CreatorMilestoneTipTotal(Address),
+    /// Per-creator milestone step amount.
+    CreatorMilestoneStep(Address),
 }
 
 #[contracterror]
@@ -219,6 +232,8 @@ pub enum TipJarError {
     DexNotConfigured = 19,
     NftNotConfigured = 20,
     SwapFailed = 21,
+    NftNotFound = 22,
+    NotNftOwner = 23,
 }
 
 #[contract]
@@ -229,8 +244,44 @@ impl TipJarContract {
     /// One-time setup to choose the administrator for the TipJar.
     pub fn init(env: Env, admin: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
-            panic_with_error!(&env, TipJarError::AlreadyInitialized as u32);
+            panic_with_error!(&env, TipJarError::AlreadyInitialized);
         }
-        env.storage().instance().put(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Admin, &admin);
+    }
+
+    /// Configures a creator-specific milestone threshold used for automatic NFT minting.
+    pub fn configure_milestone_nft(env: Env, creator: Address, milestone_step: i128) {
+        creator.require_auth();
+        nft::minting::set_milestone_step(&env, &creator, milestone_step);
+    }
+
+    /// Records a tip amount and automatically mints commemorative NFTs for reached milestones.
+    ///
+    /// Returns minted token IDs in ascending milestone order.
+    pub fn record_tip_for_milestone(
+        env: Env,
+        sender: Address,
+        creator: Address,
+        amount: i128,
+        metadata: Map<String, String>,
+    ) -> Vec<u64> {
+        sender.require_auth();
+        nft::minting::record_tip_and_maybe_mint(&env, &sender, &creator, amount, &metadata)
+    }
+
+    /// Transfers a milestone NFT to another address.
+    pub fn transfer_milestone_nft(env: Env, from: Address, to: Address, token_id: u64) {
+        from.require_auth();
+        nft::minting::transfer_nft(&env, &from, &to, token_id);
+    }
+
+    /// Returns milestone NFT token data by token ID.
+    pub fn get_milestone_nft(env: Env, token_id: u64) -> Option<nft::MilestoneNft> {
+        nft::minting::get_nft(&env, token_id)
+    }
+
+    /// Returns owned milestone NFT token IDs for `owner`.
+    pub fn get_owned_milestone_nfts(env: Env, owner: Address) -> Vec<u64> {
+        nft::minting::get_owner_tokens(&env, &owner)
     }
 }
